@@ -1,28 +1,21 @@
 import { App, MarkdownView, WorkspaceLeaf } from "obsidian";
 import { VimiumSettings } from "./settings";
 
-export type Mode = "reading" | "editing";
-
 /**
- * Owns the reading/editing mode state, forces notes into Reading view while in
- * reading mode, flips into the editor on `i`, and handles the Escape exit back
- * to reading.
+ * Reading vs editing is owned by Obsidian's own view (preview vs source)
+ * and native Vim — this plugin keeps no mode of its own. The only job left
+ * here is the `i` key: if the active note is in Reading view, flip that leaf
+ * into the editor, drop the cursor where you were reading, focus it, and
+ * (with native Vim on) land straight in insert mode. Everywhere else Vim
+ * owns its keys untouched.
  */
 export class ModeManager {
 	private app: App;
 	private settings: VimiumSettings;
-	private onChange: () => void;
 
-	private _mode: Mode = "reading";
-
-	constructor(app: App, settings: VimiumSettings, onChange: () => void) {
+	constructor(app: App, settings: VimiumSettings) {
 		this.app = app;
 		this.settings = settings;
-		this.onChange = onChange;
-	}
-
-	get mode(): Mode {
-		return this._mode;
 	}
 
 	/** Switch the active note into the editor (live preview) and focus it. */
@@ -32,9 +25,6 @@ export class ModeManager {
 
 		const centerLine = this.getReadingCenterLine(view);
 
-		this._mode = "editing";
-		this.onChange();
-
 		await this.setLeafMode(view.leaf, "source");
 		const fresh = this.app.workspace.getActiveViewOfType(MarkdownView);
 		if (fresh && centerLine !== null) {
@@ -43,6 +33,25 @@ export class ModeManager {
 			fresh.editor.scrollIntoView({ from: pos, to: pos }, true);
 		}
 		fresh?.editor.focus();
+		// With native Vim on, drop straight into insert mode so a single `i`
+		// goes from reading to typing. This replays the keystroke through the
+		// exact same path as pressing `i` by hand, whatever Vim build is
+		// underneath — no Vim internals touched.
+		if (this.settings.enableNativeVim) {
+			try {
+				const target = activeDocument.activeElement as HTMLElement | null;
+				target?.dispatchEvent(
+					new KeyboardEvent("keydown", {
+						key: "i",
+						code: "KeyI",
+						bubbles: true,
+						cancelable: true,
+					})
+				);
+			} catch {
+				// Fall back to a normal-mode landing.
+			}
+		}
 	}
 
 	/**
@@ -68,55 +77,6 @@ export class ModeManager {
 		const centerLine = Math.round(topLine + viewportLines / 2);
 
 		return Math.min(Math.max(centerLine, 0), totalLines - 1);
-	}
-
-	/** Switch the active note back into Reading view. */
-	async exitToReading(): Promise<void> {
-		this._mode = "reading";
-		this.onChange();
-
-		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-		if (view) {
-			await this.setLeafMode(view.leaf, "preview");
-			// Move focus off the (now hidden) editor so global keys are captured.
-			(activeDocument.activeElement as HTMLElement | null)?.blur?.();
-		}
-	}
-
-	/**
-	 * Handle an Escape press while in editing mode. In Vim insert mode the key
-	 * is left for native Vim (insert→normal); otherwise it returns to reading.
-	 * Returns true if it triggered the exit (consume the event).
-	 */
-	handleEditingEscape(vimInsert: boolean): boolean {
-		if (vimInsert) return false;
-		void this.exitToReading();
-		return true;
-	}
-
-	/**
-	 * Re-derive the mode from the active markdown view's actual state, so
-	 * external view-mode toggles (pencil icon, Ctrl+E) can't leave us stale.
-	 */
-	syncFromView(): void {
-		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-		if (!view) return;
-		const actual: Mode = view.getMode() === "preview" ? "reading" : "editing";
-		if (actual !== this._mode) {
-			this._mode = actual;
-			this.onChange();
-		}
-	}
-
-	/** Force the given markdown leaf into Reading view, if not already. */
-	async forceReading(leaf: WorkspaceLeaf | null): Promise<void> {
-		if (!this.settings.forceReadingView) return;
-		if (this._mode !== "reading") return;
-		if (!leaf) return;
-		const state = leaf.getViewState();
-		if (state.type !== "markdown") return;
-		if (state.state?.mode === "preview") return;
-		await this.setLeafMode(leaf, "preview");
 	}
 
 	private async setLeafMode(

@@ -61,12 +61,8 @@ export interface VimiumSettings {
 	hintFontSize: number;
 	/** Pixels scrolled per j/k press. */
 	scrollStep: number;
-	/** Force every opened note into Reading view (the Vimium layer). */
-	forceReadingView: boolean;
 	/** Turn on Obsidian's native Vim key bindings on load. */
 	enableNativeVim: boolean;
-	/** Show a small mode indicator pill. */
-	showModeIndicator: boolean;
 	/** Inject vim keys and hints into Web viewer tabs (Electron webviews). */
 	enableWebviewIntegration: boolean;
 	/** Custom reading-mode key bindings. They override the built-in keys. */
@@ -93,6 +89,13 @@ export const DEFAULT_SELECTORS = [
 	".markdown-preview-view .task-list-item-checkbox",
 	".markdown-preview-view button",
 	".markdown-embed-link",
+	// Any note or base in the main area, whatever view renders it
+	".workspace-leaf-content a",
+	".workspace-leaf-content button",
+	".bases-view a",
+	".bases-view .internal-link",
+	".bases-view .external-link",
+	".bases-view button",
 ];
 
 export const DEFAULT_SETTINGS: VimiumSettings = {
@@ -101,9 +104,7 @@ export const DEFAULT_SETTINGS: VimiumSettings = {
 	selectors: DEFAULT_SELECTORS,
 	hintFontSize: 11,
 	scrollStep: 70,
-	forceReadingView: true,
 	enableNativeVim: true,
-	showModeIndicator: true,
 	enableWebviewIntegration: true,
 	keyBindings: [
 		{
@@ -238,19 +239,6 @@ export class VimiumSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName("Force Reading view")
-			.setDesc("Open every note in Reading view so the Vimium layer is always active by default. Changes the editor's global default view mode; the previous value is restored when this is turned off or the plugin is disabled.")
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.forceReadingView)
-					.onChange(async (value) => {
-						this.plugin.settings.forceReadingView = value;
-						await this.plugin.saveSettings();
-						this.plugin.applyForceReadingView(value);
-					})
-			);
-
-		new Setting(containerEl)
 			.setName("Enable native Vim")
 			.setDesc("Turn on Obsidian's built-in Vim key bindings so 'i' drops you into a Vim editor. Changes the editor's global Vim setting; the previous value is restored when this is turned off or the plugin is disabled.")
 			.addToggle((toggle) =>
@@ -260,19 +248,6 @@ export class VimiumSettingTab extends PluginSettingTab {
 						this.plugin.settings.enableNativeVim = value;
 						await this.plugin.saveSettings();
 						this.plugin.applyNativeVim(value);
-					})
-			);
-
-		new Setting(containerEl)
-			.setName("Show mode indicator")
-			.setDesc("Show a small pill indicating the current mode.")
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.showModeIndicator)
-					.onChange(async (value) => {
-						this.plugin.settings.showModeIndicator = value;
-						await this.plugin.saveSettings();
-						this.plugin.refreshModeIndicator();
 					})
 			);
 

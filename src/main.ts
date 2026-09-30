@@ -23,37 +23,27 @@ export default class VimiumPlugin extends Plugin {
 	private scroller!: Scroller;
 	private webviewBridge!: WebviewBridge;
 
-	private indicatorEl: HTMLElement | null = null;
-	// Whether the native Vim layer is currently in insert mode.
-	private vimInsert = false;
-	// Editors whose vim adapter we subscribed to, so we can unsubscribe on unload.
-	private vimBoundCms = new Set<VimAwareCm>();
 	// Keys buffered while they are still a prefix of some key sequence.
 	private pendingKeys = "";
 	private pendingTimer: number | null = null;
 
-	// Editor config we override and must restore on unload. Tracked with
-	// explicit "did we change it" flags: the previous value may legitimately be
-	// undefined (config key never set), so it can't double as the flag.
+	// Whether the editor's global Vim setting was changed by us, so unload
+	// can restore it. Tracked with an explicit flag: the previous value may
+	// legitimately be undefined (config key never set), so it can't double
+	// as the flag.
 	private vimModeChanged = false;
 	private prevVimMode: unknown = false;
-	private viewModeChanged = false;
-	private prevDefaultViewMode: unknown = "source";
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
 
-		this.modeManager = new ModeManager(this.app, this.settings, () =>
-			this.refreshModeIndicator()
-		);
-		this.hintEngine = new HintEngine(this.app, this.settings, () =>
-			this.refreshModeIndicator()
-		);
+		this.modeManager = new ModeManager(this.app, this.settings);
+		this.hintEngine = new HintEngine(this.app, this.settings, () => {});
 		this.scroller = new Scroller(this.app);
 		this.webviewBridge = new WebviewBridge(
 			this.app,
 			() => this.settings,
-			() => this.refreshModeIndicator()
+			() => {}
 		);
 
 		this.applyEditorConfig();
@@ -67,54 +57,28 @@ export default class VimiumPlugin extends Plugin {
 			this.app.workspace.on("window-open", (win) => this.bindWindow(win.doc))
 		);
 
-		// Keep newly-activated notes in Reading view while in reading mode.
+		// The editor owns its keys; nothing to sync when leaves change.
 		this.registerEvent(
-			this.app.workspace.on("active-leaf-change", (leaf) => {
-				this.watchVimMode();
+			this.app.workspace.on("active-leaf-change", () => {
 				this.webviewBridge.ensureAll();
-				// syncFromView no-ops on non-markdown views, so webview leaves
-				// need the indicator refreshed here.
-				this.refreshModeIndicator();
-				void this.modeManager
-					.forceReading(leaf)
-					.then(() => this.modeManager.syncFromView());
 			})
 		);
-		// External view-mode toggles (pencil icon, Ctrl+E) must not leave the
-		// mode state stale.
 		this.registerEvent(
 			this.app.workspace.on("layout-change", () => {
-				this.watchVimMode();
 				this.webviewBridge.ensureAll();
-				this.modeManager.syncFromView();
-			})
-		);
-		this.registerEvent(
-			this.app.workspace.on("file-open", () => {
-				void this.modeManager.forceReading(
-					this.app.workspace.getMostRecentLeaf()
-				);
 			})
 		);
 
 		this.registerCommands();
 
 		this.app.workspace.onLayoutReady(() => {
-			this.watchVimMode();
 			this.webviewBridge.ensureAll();
-			this.refreshModeIndicator();
 		});
 	}
 
 	onunload(): void {
 		this.webviewBridge?.destroy();
 		this.hintEngine?.hide();
-		this.indicatorEl?.remove();
-		this.indicatorEl = null;
-		for (const cm of this.vimBoundCms) {
-			cm.off("vim-mode-change", this.onVimModeChange);
-		}
-		this.vimBoundCms.clear();
 		this.clearPending();
 		this.restoreEditorConfig();
 	}
@@ -134,12 +98,10 @@ export default class VimiumPlugin extends Plugin {
 
 	private applyEditorConfig(): void {
 		if (this.settings.enableNativeVim) this.applyNativeVim(true);
-		if (this.settings.forceReadingView) this.applyForceReadingView(true);
 	}
 
 	private restoreEditorConfig(): void {
 		this.applyNativeVim(false);
-		this.applyForceReadingView(false);
 	}
 
 	/** Turn the editor's global Vim setting on, or restore what it was. */
@@ -156,25 +118,9 @@ export default class VimiumPlugin extends Plugin {
 		}
 	}
 
-	/** Set the default view mode to Reading view, or restore what it was. */
-	applyForceReadingView(enabled: boolean): void {
-		const vault = this.app.vault;
-		if (enabled) {
-			if (this.viewModeChanged) return;
-			this.prevDefaultViewMode =
-				vault.getConfig("defaultViewMode") ?? "source";
-			this.viewModeChanged = true;
-			vault.setConfig("defaultViewMode", "preview");
-		} else if (this.viewModeChanged) {
-			this.viewModeChanged = false;
-			vault.setConfig("defaultViewMode", this.prevDefaultViewMode);
-		}
-	}
-
 	/** Turn the Web viewer (webview) integration on or off at runtime. */
 	applyWebviewIntegration(enabled: boolean): void {
 		this.webviewBridge?.setEnabled(enabled);
-		this.refreshModeIndicator();
 	}
 
 	private bindWindow(doc: Document): void {
@@ -201,11 +147,6 @@ export default class VimiumPlugin extends Plugin {
 			name: "Enter editing mode",
 			callback: () => void this.modeManager.enterEditing(),
 		});
-		this.addCommand({
-			id: "return-to-reading",
-			name: "Return to reading mode",
-			callback: () => void this.modeManager.exitToReading(),
-		});
 	}
 
 	// ---- key routing --------------------------------------------------------
@@ -231,21 +172,15 @@ export default class VimiumPlugin extends Plugin {
 			return;
 		}
 
-		// A webview leaf is never a markdown editor, but the mode state can be
-		// stale "editing" there (syncFromView no-ops without a MarkdownView),
-		// so the editing branch must not swallow keys on webview leaves.
+		// A webview leaf is never a markdown editor; guard the editing check
+		// so webview keys keep working regardless of view state.
 		const webviewActive = this.webviewBridge.activeWebview() !== null;
-		if (!webviewActive && this.modeManager.mode === "editing") {
-			if (e.key === "Escape" && !hasModifier(e)) {
-				if (this.modeManager.handleEditingEscape(this.vimInsert)) {
-					e.preventDefault();
-					e.stopPropagation();
-				}
-			}
-			return;
-		}
+		// The editor owns its keys: in source/live-preview mode native Vim
+		// (or plain typing) gets everything, including Escape. Reading keys
+		// only run in Reading view — Obsidian's own view, not a plugin mode.
+		if (!webviewActive && this.isEditingView()) return;
 
-		// --- reading mode ---
+		// --- reading view ---
 		if (isEditableTarget()) return;
 		// Leave OS/Obsidian shortcuts (Ctrl/Cmd/Alt) untouched. Shift is ours.
 		if (e.ctrlKey || e.metaKey || e.altKey) return;
@@ -449,66 +384,11 @@ export default class VimiumPlugin extends Plugin {
 		new OmniOpenModal(this.app, items, true, true).open();
 	}
 
-	// ---- mode indicator -----------------------------------------------------
-
-	refreshModeIndicator(): void {
-		if (!this.settings.showModeIndicator) {
-			this.indicatorEl?.remove();
-			this.indicatorEl = null;
-			return;
-		}
-		if (!this.indicatorEl) {
-			this.indicatorEl = this.addStatusBarItem();
-			this.indicatorEl.addClass("vimium-mode-indicator");
-		}
-		if (this.webviewBridge?.activeWebview()) {
-			this.indicatorEl.setText("WEB");
-			this.indicatorEl.toggleClass("mod-normal", false);
-			this.indicatorEl.toggleClass("mod-insert", false);
-			return;
-		}
-		const editing = this.modeManager.mode === "editing";
-		const insert = editing && this.vimInsert;
-		this.indicatorEl.setText(insert ? "INSERT" : editing ? "NORMAL" : "READING");
-		this.indicatorEl.toggleClass("mod-normal", editing && !insert);
-		this.indicatorEl.toggleClass("mod-insert", insert);
-	}
-
-	/** Subscribe to the active editor's vim adapter so the indicator can reflect insert mode. */
-	private watchVimMode(): void {
+	/** True when the active note is open in the editor (source/live preview). */
+	private isEditingView(): boolean {
 		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-		const cm = (
-			view as unknown as {
-				editMode?: { editor?: { cm?: { cm?: VimAwareCm } } };
-			} | null
-		)?.editMode?.editor?.cm?.cm;
-		if (!cm?.on || this.vimBoundCms.has(cm)) return;
-		this.vimBoundCms.add(cm);
-		cm.on("vim-mode-change", this.onVimModeChange);
+		return !!view && view.getMode() !== "preview";
 	}
-
-	private readonly onVimModeChange = (modeObj?: { mode?: string }): void => {
-		const insert = modeObj?.mode === "insert";
-		if (insert === this.vimInsert) return;
-		this.vimInsert = insert;
-		this.refreshModeIndicator();
-	};
-}
-
-/** The CM5-flavoured vim adapter Obsidian attaches to markdown editors. */
-interface VimAwareCm {
-	on(
-		event: "vim-mode-change",
-		handler: (modeObj?: { mode?: string }) => void
-	): void;
-	off(
-		event: "vim-mode-change",
-		handler: (modeObj?: { mode?: string }) => void
-	): void;
-}
-
-function hasModifier(e: KeyboardEvent): boolean {
-	return e.ctrlKey || e.metaKey || e.altKey || e.shiftKey;
 }
 
 /** True when focus is in a text field where our keys must not be hijacked. */
