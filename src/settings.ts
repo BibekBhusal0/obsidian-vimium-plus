@@ -1,50 +1,17 @@
-import {
-	App,
-	Command,
-	FuzzySuggestModal,
-	Modal,
-	Notice,
-	PluginSettingTab,
-	Setting,
-	TextComponent,
-} from "obsidian";
+import { App, PluginSettingTab, Setting } from "obsidian";
 import type VimiumPlugin from "./main";
 
-/** Built-in reading-mode keys and what they do; used to warn before a custom binding shadows one. */
-export const BUILTIN_KEYS: Record<string, string> = {
-	f: "show click hints",
-	F: "show click hints in a new tab",
-	j: "scroll down",
-	k: "scroll up",
-	J: "next tab",
-	K: "previous tab",
-	d: "half-page down",
-	u: "half-page up",
-	g: "jump to top (gg)",
-	G: "jump to bottom",
-	i: "enter editing mode",
-	b: "bookmark search",
-	B: "bookmark search in a new tab",
-	O: "omnibar in a new tab",
-	H: "go back in history",
-	L: "go forward in history",
-	"/": "search current file",
-	t: "new tab",
-	x: "close tab",
-	X: "restore closed tab",
-};
-
-/** A user-defined key that runs a command palette command in reading mode. */
+/** A user-defined key that runs a command palette command. Only the webview bridge still reads these; the host fires no keys. */
 export interface KeyBinding {
 	/** KeyboardEvent.key value, e.g. "x", "X", "ArrowDown". Empty = unset. */
 	key: string;
 	/** Command id, e.g. "editor:toggle-bold". Empty = unset. */
 	commandId: string;
-	/** Command display name, kept so the row stays readable if the command's plugin is disabled. */
+	/** Command display name, kept so rows stay readable if a plugin is disabled. */
 	commandName: string;
 }
 
-/** A user-defined key that runs a shell command in reading mode. */
+/** A user-defined key that runs a shell command. Same note as KeyBinding. */
 export interface TerminalCommand {
 	/** Key sequence, like KeyBinding.key. Empty = unset. */
 	key: string;
@@ -92,10 +59,15 @@ export const DEFAULT_SELECTORS = [
 	// Any note or base in the main area, whatever view renders it
 	".workspace-leaf-content a",
 	".workspace-leaf-content button",
+	".workspace-leaf-content input[type=\"checkbox\"]",
 	".bases-view a",
 	".bases-view .internal-link",
 	".bases-view .external-link",
 	".bases-view button",
+	// Live preview / editor link widgets (verified against obsidian.asar)
+	".cm-hmd-internal-link",
+	".cm-hmd-barelink",
+	".cm-link",
 ];
 
 export const DEFAULT_SETTINGS: VimiumSettings = {
@@ -120,65 +92,6 @@ export const DEFAULT_SETTINGS: VimiumSettings = {
 	],
 	terminalCommands: [],
 };
-
-/** Asks the user to confirm a binding that shadows or delays a built-in key. */
-class ConfirmKeyModal extends Modal {
-	private confirmed = false;
-
-	constructor(
-		app: App,
-		private heading: string,
-		private message: string,
-		private confirmLabel: string,
-		private onResult: (confirmed: boolean) => void
-	) {
-		super(app);
-	}
-
-	onOpen(): void {
-		this.titleEl.setText(this.heading);
-		this.contentEl.createEl("p", { text: this.message });
-		new Setting(this.contentEl)
-			.addButton((button) =>
-				button
-					.setButtonText(this.confirmLabel)
-					.setDestructive()
-					.setCta()
-					.onClick(() => {
-						this.confirmed = true;
-						this.close();
-					})
-			)
-			.addButton((button) =>
-				button.setButtonText("Cancel").onClick(() => this.close())
-			);
-	}
-
-	onClose(): void {
-		this.contentEl.empty();
-		this.onResult(this.confirmed);
-	}
-}
-
-/** Fuzzy picker over every command in the command palette. */
-class CommandSuggestModal extends FuzzySuggestModal<Command> {
-	constructor(app: App, private onChoose: (command: Command) => void) {
-		super(app);
-		this.setPlaceholder("Pick a command…");
-	}
-
-	getItems(): Command[] {
-		return this.app.commands.listCommands();
-	}
-
-	getItemText(command: Command): string {
-		return command.name;
-	}
-
-	onChooseItem(command: Command): void {
-		this.onChoose(command);
-	}
-}
 
 export class VimiumSettingTab extends PluginSettingTab {
 	plugin: VimiumPlugin;
@@ -226,32 +139,6 @@ export class VimiumSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName("Scroll step")
-			.setDesc("Pixels scrolled per j / k press.")
-			.addSlider((slider) =>
-				slider
-					.setLimits(20, 300, 10)
-					.setValue(this.plugin.settings.scrollStep)
-					.onChange(async (value) => {
-						this.plugin.settings.scrollStep = value;
-						await this.plugin.saveSettings();
-					})
-			);
-
-		new Setting(containerEl)
-			.setName("Enable native Vim")
-			.setDesc("Turn on Obsidian's built-in Vim key bindings so 'i' drops you into a Vim editor. Changes the editor's global Vim setting; the previous value is restored when this is turned off or the plugin is disabled.")
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.enableNativeVim)
-					.onChange(async (value) => {
-						this.plugin.settings.enableNativeVim = value;
-						await this.plugin.saveSettings();
-						this.plugin.applyNativeVim(value);
-					})
-			);
-
-		new Setting(containerEl)
 			.setName("Web viewer integration")
 			.setDesc("Inject the vim keys (scrolling, hints, tab switching) into Web viewer pages. Custom key bindings and terminal commands still require focus to be outside the page.")
 			.addToggle((toggle) =>
@@ -281,192 +168,5 @@ export class VimiumSettingTab extends PluginSettingTab {
 				text.inputEl.addClass("vimium-selectors-input");
 			});
 
-		this.displayKeyBindings(containerEl);
-		this.displayTerminalCommands(containerEl);
-	}
-
-	private displayKeyBindings(containerEl: HTMLElement): void {
-		new Setting(containerEl).setName("Custom key bindings").setHeading();
-		containerEl.createEl("p", {
-			text: "Bind a key — or a sequence like gT — to any command from the command palette. Active in reading mode. Custom bindings override the built-in keys (you'll be asked to confirm).",
-			cls: "setting-item-description",
-		});
-
-		this.plugin.settings.keyBindings.forEach((binding, index) => {
-			const row = new Setting(containerEl);
-			row.settingEl.addClass("vimium-keybinding-row");
-
-			row.addText((text) => {
-				text.setPlaceholder("Key(s)").setValue(binding.key);
-				text.inputEl.addClass("vimium-keybinding-key");
-				this.attachKeySequenceField(
-					text,
-					() => binding.key,
-					(key) => {
-						binding.key = key;
-					},
-					(key) =>
-						this.plugin.settings.keyBindings.some(
-							(other) => other !== binding && other.key === key
-						) ||
-						this.plugin.settings.terminalCommands.some(
-							(t) => t.key === key
-						)
-				);
-			});
-
-			row.addButton((button) => {
-				button
-					.setButtonText(binding.commandName || "Choose command…")
-					.onClick(() => {
-						new CommandSuggestModal(this.app, (command) => {
-							binding.commandId = command.id;
-							binding.commandName = command.name;
-							button.setButtonText(command.name);
-							void this.plugin.saveSettings();
-						}).open();
-					});
-			});
-
-			row.addExtraButton((button) => {
-				button
-					.setIcon("trash")
-					.setTooltip("Remove binding")
-					.onClick(async () => {
-						this.plugin.settings.keyBindings.splice(index, 1);
-						await this.plugin.saveSettings();
-						this.display();
-					});
-			});
-		});
-
-		new Setting(containerEl).addButton((button) => {
-			button.setButtonText("Add binding").onClick(async () => {
-				this.plugin.settings.keyBindings.push({
-					key: "",
-					commandId: "",
-					commandName: "",
-				});
-				await this.plugin.saveSettings();
-				this.display();
-			});
-		});
-	}
-
-	private displayTerminalCommands(containerEl: HTMLElement): void {
-		new Setting(containerEl).setName("Terminal commands").setHeading();
-		containerEl.createEl("p", {
-			text: "Bind a key — or a sequence — to a shell command, active in reading mode. {{path}} (active note), {{folder}} (the note's folder), and {{vault}} (vault root) are replaced with quoted absolute paths, and the command runs from the note's folder. Example: kitty --directory {{folder}}",
-			cls: "setting-item-description",
-		});
-
-		this.plugin.settings.terminalCommands.forEach((cmd, index) => {
-			const row = new Setting(containerEl);
-			row.settingEl.addClass("vimium-terminal-row");
-
-			row.addText((text) => {
-				text.setPlaceholder("Key(s)").setValue(cmd.key);
-				text.inputEl.addClass("vimium-keybinding-key");
-				this.attachKeySequenceField(
-					text,
-					() => cmd.key,
-					(key) => {
-						cmd.key = key;
-					},
-					(key) =>
-						this.plugin.settings.terminalCommands.some(
-							(other) => other !== cmd && other.key === key
-						) ||
-						this.plugin.settings.keyBindings.some((b) => b.key === key)
-				);
-			});
-
-			row.addText((text) => {
-				text.setPlaceholder("Shell command…").setValue(cmd.command);
-				text.inputEl.addClass("vimium-terminal-command");
-				text.onChange(async (value) => {
-					cmd.command = value.trim();
-					await this.plugin.saveSettings();
-				});
-			});
-
-			row.addExtraButton((button) => {
-				button
-					.setIcon("trash")
-					.setTooltip("Remove command")
-					.onClick(async () => {
-						this.plugin.settings.terminalCommands.splice(index, 1);
-						await this.plugin.saveSettings();
-						this.display();
-					});
-			});
-		});
-
-		new Setting(containerEl).addButton((button) => {
-			button.setButtonText("Add terminal command").onClick(async () => {
-				this.plugin.settings.terminalCommands.push({
-					key: "",
-					command: "",
-				});
-				await this.plugin.saveSettings();
-				this.display();
-			});
-		});
-	}
-
-	/**
-	 * Wire a key-sequence text field. Committed on blur/Enter, not per
-	 * keystroke, so a sequence like "gT" is validated as a whole. Rejects keys
-	 * already bound elsewhere and asks for confirmation before shadowing or
-	 * delaying a built-in key.
-	 */
-	private attachKeySequenceField(
-		text: TextComponent,
-		getKey: () => string,
-		setKey: (key: string) => void,
-		isDuplicate: (key: string) => boolean
-	): void {
-		const commit = (): void => {
-			const newKey = text.inputEl.value.trim();
-			if (newKey === getKey()) return;
-			if (newKey && isDuplicate(newKey)) {
-				new Notice(`"${newKey}" is already bound to another command.`);
-				text.setValue(getKey());
-				return;
-			}
-			const apply = (): void => {
-				setKey(newKey);
-				void this.plugin.saveSettings();
-			};
-			const done = (ok: boolean): void => {
-				if (ok) apply();
-				else text.setValue(getKey());
-			};
-			const first = newKey.charAt(0);
-			if ((newKey.length === 1 && BUILTIN_KEYS[newKey]) || newKey === "gg") {
-				const shadowed = newKey === "gg" ? "gg" : newKey;
-				new ConfirmKeyModal(
-					this.app,
-					"Override built-in key?",
-					`"${shadowed}" is a built-in key (${BUILTIN_KEYS[first]}). Binding a command to it will override the built-in action in reading mode.`,
-					"Override",
-					done
-				).open();
-			} else if (newKey.length > 1 && BUILTIN_KEYS[first]) {
-				new ConfirmKeyModal(
-					this.app,
-					"Delay built-in key?",
-					`This sequence starts with "${first}", a built-in key (${BUILTIN_KEYS[first]}). While the plugin waits for the rest of the sequence, the built-in action will only run after a short chord timeout.`,
-					"Bind anyway",
-					done
-				).open();
-			} else {
-				apply();
-			}
-		};
-		text.inputEl.addEventListener("change", commit);
-		text.inputEl.addEventListener("keydown", (e) => {
-			if (e.key === "Enter") text.inputEl.blur();
-		});
 	}
 }
