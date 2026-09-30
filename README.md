@@ -1,36 +1,19 @@
 # Vimium+ (modeless fork)
 
-A Vimium-FF–style keyboard layer for Obsidian. There are no plugin modes: Obsidian's own views and native Vim own them. In **Reading view**, scroll with `j`/`k`, jump around with `f` click-hints, and never touch the mouse. In the **editor**, every key belongs to Vim (or plain typing) — the plugin stays out of the way, except on-demand hints.
-
-- Press `i` in Reading view to drop into the editor, straight into Vim insert mode.
-- Press `f` (or the "Show click hints" command) anywhere for hints over links, buttons, tabs, ribbon, and file tree.
-- No forced Reading view, no double-Escape dance, no mode pill.
+Click hints for Obsidian, nothing else. Invoke "Show click hints" (or "…in a new tab") from the command palette or a hotkey and type the label to click: links, buttons, checkboxes, tabs, ribbon, file tree. There are no plugin modes and no built-in keys — Obsidian's own views and native Vim own every key.
 
 ![Click hints shown over links, tabs, and the file tree after pressing `f`](assets/hints.png)
 
 > Not affiliated with the [Vimium](https://github.com/philc/vimium) browser extension or the existing Vimium community plugin — this is an independent reimplementation of the Vimium idea for Obsidian.
 
-## Keybindings (Reading mode)
+## Keys
 
-| Key | Action |
-| --- | --- |
-| `f` | Show click hints; type the letters to click that element (links, buttons, tabs, ribbon, file tree, checkboxes…). |
-| `Shift`+`F` | Same hints, but open the chosen link in a **new tab**. |
-| `j` / `k` | Scroll down / up. |
-| `d` / `u` | Scroll a half-page down / up. |
-| `g g` / `Shift`+`G` | Jump to top / bottom. |
-| `Shift`+`J` / `Shift`+`K` | Switch to the next / previous tab. |
-| `b` / `Shift`+`B` | Fuzzy-search your bookmarks; open the pick in the current / a new tab. |
-| `Shift`+`O` | Omnibar: open a bookmark, recent file, or typed URL in a new tab. |
-| `Shift`+`H` / `Shift`+`L` | Go back / forward in history. |
-| `/` | Search the current file. |
-| `t` | Open a new tab. |
-| `x` / `Shift`+`X` | Close the current tab / restore closed tabs. |
-| `i` | Focus the editor, straight into Vim insert mode (Reading view only; in the editor `i` is Vim's own). |
+No built-in keys. Bind these two commands to hotkeys (e.g. Alt+F):
 
-Any key — or a multi-key sequence like `gT` — can be bound to any command-palette command under **Settings → Vimium+ → Custom key bindings**. Type the keys as plain text; each character is one keypress. Two bindings ship by default: `o` (quick switcher) and `p` (command palette) — remap or remove them as you like. Custom bindings take priority over the built-in keys above; the settings dialog asks for confirmation before you shadow a built-in (or start a sequence with one, which delays it by the chord timeout).
+- Show click hints
+- Show click hints (open in new tab)
 
-While hints are showing: type the label to activate, `Backspace` to correct, `Esc` to cancel. Holding `Shift` on the **last** letter of a label opens that target in a new tab (even if you started with plain `f`).
+While hints are showing: type the label to activate, `Backspace` to correct, `Esc` to cancel. Holding `Shift` on the **last** letter of a label opens that target in a new tab (even if you started with plain hints).
 
 ## Web viewer tabs
 
@@ -78,9 +61,6 @@ ln -s "$(pwd)" "<your-vault>/.obsidian/plugins/vimium-plus"
 
 ## Verify it works
 
-1. Open any note in **Reading view**.
-2. `j`/`k` scroll; `d`/`u` half-page; `gg`/`G` top/bottom; `Shift`+`J`/`Shift`+`K` switch tabs.
-3. Press `f` → hint letters appear over links/buttons (in the note **and** on tabs/ribbon/file tree); type a label to click it; `Esc` cancels. `Shift`+`F` opens the link in a new tab.
-4. Press `i` → the note switches to the editor, focused, already in Vim insert mode.
-5. In the editor, all keys are Vim's — the plugin only appears when you invoke hints.
-6. Typing in the search box is **not** hijacked by `j`/`k`/`f`.
+1. Open any note.
+2. Invoke "Show click hints" → hint letters appear over links/buttons/checkboxes (in the note **and** on tabs/ribbon/file tree); type a label to click it; `Esc` cancels. The new-tab variant opens the link in a new tab.
+3. Typing in the search box is **not** hijacked.
