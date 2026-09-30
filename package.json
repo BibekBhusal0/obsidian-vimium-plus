@@ -1,7 +1,7 @@
 {
 	"name": "vimium-plus",
 	"version": "0.3.0",
-	"description": "Vimium-style keyboard navigation for Obsidian.",
+	"description": "Click hints for Obsidian, nothing else.",
 	"main": "main.js",
 	"scripts": {
 		"dev": "node esbuild.config.mjs",
@@ -14,7 +14,7 @@
 		"vimium",
 		"keyboard"
 	],
-	"author": "Stian Lyng",
+	"author": "Bibek Bhusal",
 	"license": "MIT",
 	"devDependencies": {
 		"@types/node": "^20.11.0",
